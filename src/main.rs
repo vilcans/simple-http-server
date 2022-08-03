@@ -469,11 +469,24 @@ impl Handler for MainHandler {
             ));
         }
 
-        if self.upload.is_some() && req.method == method::Post {
-            if let Err((s, msg)) = self.save_files(req, &fs_path) {
-                return Ok(error_resp(s, &msg));
-            } else {
-                return Ok(Response::with((status::Found, Redirect(req.url.clone()))));
+        if self.upload.is_some() {
+            match req.method {
+                method::Post => {
+                    if let Err((s, msg)) = self.save_files(req, &fs_path) {
+                        return Ok(error_resp(s, &msg));
+                    } else {
+                        return Ok(Response::with((status::Found, Redirect(req.url.clone()))));
+                    }
+                }
+                method::Put => match self.put_file(req, &fs_path) {
+                    Ok(status) => {
+                        return Ok(Response::with(status));
+                    }
+                    Err((s, msg)) => {
+                        return Ok(error_resp(s, &msg));
+                    }
+                },
+                _ => {}
             }
         }
 
@@ -589,6 +602,38 @@ impl MainHandler {
                 status::BadRequest,
                 "The request is not multipart".to_owned(),
             )),
+        }
+    }
+
+    fn put_file(
+        &self,
+        req: &mut Request,
+        path: &Path,
+    ) -> Result<status::Status, (status::Status, String)> {
+        let target_path = path.to_owned();
+        let directory = match target_path.parent() {
+            Some(d) => d,
+            None => return Err((status::BadRequest, format!("Invalid path"))),
+        };
+        dbg!(&directory);
+        if let Err(e) = std::fs::create_dir_all(directory) {
+            return Err((
+                status::InternalServerError,
+                format!("Failed to create directory: {:?}", e),
+            ));
+        }
+        let existed = std::path::Path::exists(&target_path);
+
+        if let Err(errno) = std::fs::File::create(target_path.clone())
+            .and_then(|mut file| io::copy(&mut req.body, &mut file))
+        {
+            return Err((
+                status::InternalServerError,
+                format!("Copy file failed: {}", errno),
+            ));
+        } else {
+            println!("  >> File saved: {}", target_path.display());
+            Ok(if existed { status::Ok } else { status::Created })
         }
     }
 
